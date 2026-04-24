@@ -1,0 +1,6 @@
+first install these
+
+npm install @tensorflow/tfjs @tensorflow-models/coco-ssd
+npm install @tensorflow-models/face-landmarks-detection
+npm install @mediapipe/face_mesh
+

@@ -1,0 +1,162 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+// ─────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────
+
+enum Role {
+  STUDENT
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  TERMINATED
+}
+
+enum ViolationEvent {
+  TAB_SWITCH
+  FULLSCREEN_EXIT
+  MULTIPLE_PERSONS
+  PHONE_DETECTED
+  FACE_ABSENT
+  DEVTOOLS_OPEN
+  CLIPBOARD_ATTEMPT
+  NETWORK_LOSS
+}
+
+// ─────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         Role      @default(STUDENT)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sessions     Session[]
+  attempts     Attempt[]
+
+  @@index([email])
+}
+
+// ─────────────────────────────────────────
+// SESSION (JWT-backed)
+// ─────────────────────────────────────────
+
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  token       String   @unique
+  ip          String?
+  userAgent   String?
+  isActive    Boolean  @default(true)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────
+// EXAM
+// ─────────────────────────────────────────
+
+model Exam {
+  id            String     @id @default(cuid())
+  title         String
+  description   String?
+  durationMins  Int        // exam duration in minutes
+  maxViolations Int        @default(5)
+  isActive      Boolean    @default(false)
+  createdBy     String     // admin userId
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  questions     Question[]
+  attempts      Attempt[]
+
+  @@index([isActive])
+}
+
+// ─────────────────────────────────────────
+// QUESTION
+// ─────────────────────────────────────────
+
+model Question {
+  id        String   @id @default(cuid())
+  examId    String
+  text      String
+  options   Json     // string[]
+  answer    String   // correct option index or value
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+
+  @@index([examId])
+}
+
+// ─────────────────────────────────────────
+// ATTEMPT
+// ─────────────────────────────────────────
+
+model Attempt {
+  id              String        @id @default(cuid())
+  userId          String
+  examId          String
+  status          AttemptStatus @default(IN_PROGRESS)
+  answers         Json          @default("{}") // { questionId: selectedOption }
+  score           Int?
+  violationCount  Int           @default(0)
+  startedAt       DateTime      @default(now())
+  submittedAt     DateTime?
+  terminatedAt    DateTime?
+  timeRemainingS  Int?          // seconds remaining at last save
+
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exam            Exam          @relation(fields: [examId], references: [id], onDelete: Cascade)
+  logs            Log[]
+
+  @@unique([userId, examId])   // one attempt per student per exam
+  @@index([userId])
+  @@index([examId])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────
+// LOG (Violation Log)
+// ─────────────────────────────────────────
+
+model Log {
+  id          String         @id @default(cuid())
+  attemptId   String
+  type        ViolationEvent
+  metadata    Json           @default("{}") // AI confidence, device info, etc.
+  createdAt   DateTime       @default(now())
+
+  attempt     Attempt        @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId])
+  @@index([type])
+  @@index([createdAt])
+}

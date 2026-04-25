@@ -1,5 +1,56 @@
 @import "tailwindcss";
+/* src/app/globals.css */
 
+/* Prevent text selection during exam */
+.exam-active {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    user-select: none;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: #111827;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #4b5563;
+}
+
+/* Fullscreen transition */
+:fullscreen {
+    background: #030712;
+}
+
+:-webkit-full-screen {
+    background: #030712;
+}
+
+/* Smooth transitions */
+* {
+    transition-property: color, background-color, border-color;
+    transition-duration: 150ms;
+}
+
+/* Hide scrollbar on exam nav */
+.hide-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
 :root {
   --background: #ffffff;
   --foreground: #171717;

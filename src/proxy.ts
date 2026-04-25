@@ -5,7 +5,7 @@ import { verifyToken } from "@/lib/jwt";
 
 const PUBLIC_PATHS = ["/login", "/register", "/api/auth/login", "/api/auth/register"];
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Allow public paths

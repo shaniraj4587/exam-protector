@@ -6,6 +6,38 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 
+// ── Field must be OUTSIDE RegisterPage ───────────────────
+// Defining it inside causes remount on every keystroke
+interface FieldProps {
+    label: string;
+    type?: string;
+    value: string;
+    onChange: (val: string) => void;
+    placeholder: string;
+}
+
+function Field({ label, type = "text", value, onChange, placeholder }: FieldProps) {
+    return (
+        <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                {label}
+            </label>
+            <input
+                type={type}
+                required
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                placeholder={placeholder}
+                className="w-full bg-gray-800 border border-gray-700 text-white
+                   rounded-lg px-4 py-2.5 text-sm placeholder-gray-500
+                   focus:outline-none focus:ring-2 focus:ring-blue-500
+                   focus:border-transparent"
+            />
+        </div>
+    );
+}
+
+// ── Main component ────────────────────────────────────────
 export default function RegisterPage() {
     const router = useRouter();
     const [form, setForm] = useState({
@@ -49,37 +81,13 @@ export default function RegisterPage() {
         }
     };
 
-    const Field = ({
-        label, type = "text", field, placeholder,
-    }: {
-        label: string;
-        type?: string;
-        field: keyof typeof form;
-        placeholder: string;
-    }) => (
-        <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1.5">
-                {label}
-            </label>
-            <input
-                type={type}
-                required
-                value={form[field]}
-                onChange={(e) => setForm({ ...form, [field]: e.target.value })}
-                placeholder={placeholder}
-                className="w-full bg-gray-800 border border-gray-700 text-white
-                   rounded-lg px-4 py-2.5 text-sm placeholder-gray-500
-                   focus:outline-none focus:ring-2 focus:ring-blue-500
-                   focus:border-transparent"
-            />
-        </div>
-    );
-
     return (
         <div className="min-h-screen bg-gray-950 flex items-center
                     justify-center px-4">
             <div className="w-full max-w-md bg-gray-900 border border-gray-800
                       rounded-2xl p-8 shadow-2xl">
+
+                {/* Header */}
                 <div className="mb-8 text-center">
                     <div className="inline-flex items-center justify-center w-14 h-14
                           bg-blue-600 rounded-xl mb-4">
@@ -92,16 +100,38 @@ export default function RegisterPage() {
                         </svg>
                     </div>
                     <h1 className="text-2xl font-bold text-white">Create Account</h1>
-                    <p className="text-gray-400 text-sm mt-1">
-                        Register as a student
-                    </p>
+                    <p className="text-gray-400 text-sm mt-1">Register as a student</p>
                 </div>
 
+                {/* Form */}
                 <form onSubmit={handleSubmit} className="space-y-4">
-                    <Field label="Full Name" field="name" placeholder="John Doe" />
-                    <Field label="Email Address" field="email" placeholder="you@example.com" type="email" />
-                    <Field label="Password" field="password" placeholder="••••••••" type="password" />
-                    <Field label="Confirm Password" field="confirm" placeholder="••••••••" type="password" />
+                    <Field
+                        label="Full Name"
+                        placeholder="John Doe"
+                        value={form.name}
+                        onChange={(val) => setForm((prev) => ({ ...prev, name: val }))}
+                    />
+                    <Field
+                        label="Email Address"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={form.email}
+                        onChange={(val) => setForm((prev) => ({ ...prev, email: val }))}
+                    />
+                    <Field
+                        label="Password"
+                        type="password"
+                        placeholder="••••••••"
+                        value={form.password}
+                        onChange={(val) => setForm((prev) => ({ ...prev, password: val }))}
+                    />
+                    <Field
+                        label="Confirm Password"
+                        type="password"
+                        placeholder="••••••••"
+                        value={form.confirm}
+                        onChange={(val) => setForm((prev) => ({ ...prev, confirm: val }))}
+                    />
 
                     <button
                         type="submit"

@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useExamStore } from "@/store/examStore";
 import { useExamTimer } from "@/hooks/useExamTimer";
@@ -10,7 +10,7 @@ import { useAutoSave } from "@/hooks/useAutoSave";
 import { useProctor } from "@/hooks/useProctor";
 import { useBrowserMonitor } from "@/hooks/monitors/useBrowserMonitor";
 import { useViolation } from "@/hooks/useViolation";
-import { useWebcam } from "@/hooks/useWebcam";
+import { WebcamProvider, useWebcamContext } from "@/context/WebcamContext";
 import { PreFlight } from "@/components/exam/PreFlight";
 import { QuestionCard } from "@/components/exam/QuestionCard";
 import { ExamNavBar } from "@/components/exam/ExamNavBar";
@@ -27,49 +27,73 @@ const MAX_VIOLATIONS = 5;
 
 type Phase = "preflight" | "fullscreen" | "exam" | "submitted" | "terminated";
 
-export default function ExamPage() {
+// ── Inner component (needs WebcamContext) ─────────────────
+function ExamPageInner() {
+
     const params = useParams();
     const router = useRouter();
     const attemptId = params.attemptId as string;
 
     const [phase, setPhase] = useState<Phase>("preflight");
-    const [examMeta, setExamMeta] = useState<{
-        title: string; durationMins: number; questionCount: number;
-    } | null>(null);
     const [lastViolation, setLastViolation] = useState<ViolationEvent | null>(null);
     const [isOnline, setIsOnline] = useState(true);
-    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [examMeta, setExamMeta] = useState<{
+        title: string;
+        durationMins: number;
+        questionCount: number;
+    } | null>(null);
 
+    // ── Shared webcam ref from context ────────────────────
+    const { videoRef, isReady: camReady, requestCamera, attachStream } = useWebcamContext();
+
+    // Callback ref that attaches stream as soon as the element mounts
+    const videoCallbackRef = useCallback(
+        (el: HTMLVideoElement | null) => {
+            if (!el) return;
+            // Point the main ref to this element
+            (videoRef as React.MutableRefObject<HTMLVideoElement>).current = el;
+            // Attach stream immediately
+            attachStream(el);
+        },
+        [videoRef, attachStream]
+    );
+    // ── Exam store ────────────────────────────────────────
     const {
-        questions, answers, currentIndex, status, violationCount,
-        setAnswer, setCurrentIndex, setStatus, initExam,
+        questions,
+        answers,
+        currentIndex,
+        violationCount,
+        setAnswer,
+        setCurrentIndex,
+        setStatus,
+        initExam,
     } = useExamStore();
 
-    // ── Webcam ───────────────────────────────────────────
-    const { videoRef, isReady: camReady, requestCamera } = useWebcam();
-
-    // ── Auto-save ────────────────────────────────────────
+    // ── Auto save ─────────────────────────────────────────
     const { saveNow } = useAutoSave();
 
-    // ── Submit handler ───────────────────────────────────
-    const submitExam = useCallback(async (reason = "MANUAL") => {
-        const store = useExamStore.getState();
-        try {
-            await fetch("/api/exam/submit", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    attemptId,
-                    answers: store.answers,
-                    reason,
-                }),
-            });
-        } catch {
-            console.error("Submit failed");
-        }
-    }, [attemptId]);
+    // ── Submit ────────────────────────────────────────────
+    const submitExam = useCallback(
+        async (reason = "MANUAL") => {
+            const store = useExamStore.getState();
+            try {
+                await fetch("/api/exam/submit", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        attemptId,
+                        answers: store.answers,
+                        reason,
+                    }),
+                });
+            } catch {
+                console.error("Submit failed");
+            }
+        },
+        [attemptId]
+    );
 
-    // ── Terminate handler ─────────────────────────────────
+    // ── Terminate ─────────────────────────────────────────
     const terminateExam = useCallback(async () => {
         await fetch("/api/auth/logout", { method: "POST" });
         setPhase("terminated");
@@ -92,8 +116,9 @@ export default function ExamPage() {
         [reportViolation]
     );
 
-    // ── AI Proctor ────────────────────────────────────────
+    // ── AI Proctor ─────────────────────────────────────────
     const proctorEnabled = phase === "exam" && camReady;
+
     const {
         isLoading: aiLoading,
         isReady: aiReady,
@@ -110,8 +135,7 @@ export default function ExamPage() {
         enabled: phase === "exam",
         onViolation: handleViolation,
         onNetworkChange: setIsOnline,
-        onFullscreenChange: (fs) => {
-            setIsFullscreen(fs);
+        onFullscreenChange: (fs: boolean) => {
             if (!fs && phase === "exam") setPhase("fullscreen");
         },
     });
@@ -119,31 +143,20 @@ export default function ExamPage() {
     // ── Timer ─────────────────────────────────────────────
     const { formatted, isWarning, isDanger } = useExamTimer({
         onTimeout: async () => {
-            toast("⏱ Time's up! Submitting your exam...", { duration: 3000 });
+            toast("⏱ Time's up! Submitting…", { duration: 3000 });
             await submitExam("TIMEOUT");
             setPhase("submitted");
         },
     });
 
-    // ── Load exam data ────────────────────────────────────
+    // ── Load exam ─────────────────────────────────────────
     useEffect(() => {
-        const loadExam = async () => {
+        const load = async () => {
             try {
-                const res = await fetch("/api/exam/start", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ examId: attemptId }),
-                });
+                const res = await fetch(`/api/exam/attempt/${attemptId}`);
+                const data = await res.json();
+                if (!res.ok) { router.push("/dashboard"); return; }
 
-                // If already have attempt, fetch directly
-                const attemptRes = await fetch(`/api/exam/attempt/${attemptId}`);
-                if (!attemptRes.ok) {
-                    // Fallback: get from store or redirect
-                    router.push("/dashboard");
-                    return;
-                }
-
-                const data = await attemptRes.json();
                 setExamMeta({
                     title: data.exam.title,
                     durationMins: data.exam.durationMins,
@@ -154,8 +167,7 @@ export default function ExamPage() {
                 router.push("/dashboard");
             }
         };
-
-        loadExam();
+        load();
     }, [attemptId]);
 
     // ── Phase handlers ────────────────────────────────────
@@ -166,26 +178,27 @@ export default function ExamPage() {
 
     const handleEnterFullscreen = async () => {
         await enterFullscreen();
-        setIsFullscreen(true);
         setPhase("exam");
     };
 
-    // ── Submit manually ───────────────────────────────────
     const handleManualSubmit = async () => {
-        const unanswered = questions.filter((q) => !answers[q.id]).length;
-        if (unanswered > 0) {
-            const confirmed = window.confirm(
-                `You have ${unanswered} unanswered question(s). Submit anyway?`
-            );
-            if (!confirmed) return;
-        }
+        const unanswered = questions.filter(
+            (q: { id: string }) => !answers[q.id]
+        ).length;
+        if (
+            unanswered > 0 &&
+            !confirm(`${unanswered} unanswered question(s). Submit anyway?`)
+        ) return;
         await saveNow();
         await submitExam("MANUAL");
         setPhase("submitted");
     };
 
-    // ── Render based on phase ─────────────────────────────
-    if (phase === "terminated") return <TerminatedScreen reason="violations" />;
+    // ── Render phases ─────────────────────────────────────
+    if (phase === "terminated") {
+        return <TerminatedScreen reason="violations" />;
+    }
+
     if (phase === "submitted") {
         return (
             <div className="min-h-screen bg-gray-950 flex items-center
@@ -251,13 +264,11 @@ export default function ExamPage() {
                 onDismiss={() => setLastViolation(null)}
             />
 
-            <div className="min-h-screen bg-gray-950 flex flex-col">
+            <div className="min-h-screen bg-gray-950 flex flex-col select-none">
 
                 {/* ── Top Bar ─────────────────────────────── */}
-                <header className="bg-gray-900 border-b border-gray-800 px-5
-                           py-3 flex items-center justify-between
-                           shrink-0">
-                    {/* Left: title */}
+                <header className="bg-gray-900 border-b border-gray-800 px-5 py-3
+                           flex items-center justify-between shrink-0">
                     <div className="flex-1 min-w-0">
                         <h1 className="text-sm font-semibold text-white truncate">
                             {examMeta.title}
@@ -267,18 +278,18 @@ export default function ExamPage() {
                         </p>
                     </div>
 
-                    {/* Center: timer */}
-                    <div className={`text-2xl font-mono font-bold tabular-nums
-                           ${isDanger
-                            ? "text-red-400 animate-pulse"
-                            : isWarning
-                                ? "text-yellow-400"
-                                : "text-white"
-                        }`}>
+                    <div
+                        className={`text-2xl font-mono font-bold tabular-nums mx-4
+                        ${isDanger
+                                ? "text-red-400 animate-pulse"
+                                : isWarning
+                                    ? "text-yellow-400"
+                                    : "text-white"
+                            }`}
+                    >
                         {formatted}
                     </div>
 
-                    {/* Right: proctor controls */}
                     <div className="flex-1 flex items-center justify-end gap-3">
                         <AIStatusBadge
                             isLoading={aiLoading}
@@ -301,15 +312,17 @@ export default function ExamPage() {
                         <QuestionCard
                             question={currentQuestion}
                             selectedAnswer={answers[currentQuestion.id]}
-                            onAnswer={(ans) => setAnswer(currentQuestion.id, ans)}
+                            onAnswer={(ans: string) => setAnswer(currentQuestion.id, ans)}
                             index={currentIndex}
                             total={questions.length}
                         />
 
-                        {/* Prev / Next */}
+                        {/* Navigation */}
                         <div className="flex items-center justify-between mt-6">
                             <button
-                                onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))}
+                                onClick={() =>
+                                    setCurrentIndex(Math.max(0, currentIndex - 1))
+                                }
                                 disabled={currentIndex === 0}
                                 className="flex items-center gap-2 px-5 py-2.5 bg-gray-800
                            hover:bg-gray-700 disabled:opacity-40
@@ -345,35 +358,42 @@ export default function ExamPage() {
                         </div>
                     </main>
 
-                    {/* Right sidebar */}
+                    {/* ── Right Sidebar ────────────────────── */}
                     <aside className="w-64 shrink-0 border-l border-gray-800
-                            p-4 flex flex-col gap-4 overflow-y-auto lg:flex">
-                        {/* Webcam */}
+                            p-4 flex-col gap-4 hidden lg:flex overflow-y-auto">
+
+                        {/* ── Webcam feed in sidebar ── */}
                         <div>
                             <p className="text-xs text-gray-500 uppercase tracking-wider
-                            font-medium mb-2">
+                font-medium mb-2">
                                 Webcam Feed
                             </p>
+
                             <video
-                                ref={videoRef}
+                                ref={videoCallbackRef}   // ← callback ref, not videoRef directly
                                 autoPlay
                                 muted
                                 playsInline
                                 className="w-full aspect-video rounded-lg object-cover
-                           border border-gray-700 bg-gray-800"
+               border border-gray-700 bg-gray-800"
                             />
+
+                            <p className={`text-xs mt-1 text-center ${camReady ? "text-green-500" : "text-gray-600"
+                                }`}>
+                                {camReady ? "🟢 Camera active" : "⏳ Waiting for camera…"}
+                            </p>
                         </div>
 
-                        {/* Navigator */}
+                        {/* Question navigator */}
                         <ExamNavBar
                             currentIndex={currentIndex}
                             total={questions.length}
                             answers={answers}
-                            questionIds={questions.map((q) => q.id)}
+                            questionIds={questions.map((q: { id: string }) => q.id)}
                             onNavigate={setCurrentIndex}
                         />
 
-                        {/* Submit button in sidebar */}
+                        {/* Submit */}
                         <button
                             onClick={handleManualSubmit}
                             className="w-full bg-green-700 hover:bg-green-600 text-white
@@ -386,5 +406,14 @@ export default function ExamPage() {
                 </div>
             </div>
         </>
+    );
+}
+
+// ── Outer wrapper provides WebcamContext ──────────────────
+export default function ExamPage() {
+    return (
+        <WebcamProvider>
+            <ExamPageInner />
+        </WebcamProvider>
     );
 }

@@ -2,18 +2,13 @@
 
 "use client";
 
-import * as blazeface from "@tensorflow-models/blazeface";
 import { getCocoModel, getFaceModel } from "./modelLoader";
 import { DetectionResult, CocoDetection } from "@/types/proctor";
 
-const PHONE_CLASSES = ["cell phone", "remote"];
+const PHONE_CLASSES = ["cell phone", "remote", "book"];
+const THRESHOLDS = { PHONE: 0.40, PERSON: 0.45, FACE: 0.50 };
+// ↑ Lowered thresholds so phone is easier to detect
 
-const THRESHOLDS = {
-    PHONE: 0.55,
-    PERSON: 0.55,
-};
-
-// ── Run full detection on a video frame ──────────────────
 export async function runDetection(
     video: HTMLVideoElement
 ): Promise<DetectionResult[]> {
@@ -22,9 +17,7 @@ export async function runDetection(
         video.readyState < 2 ||
         video.videoWidth === 0 ||
         video.videoHeight === 0
-    ) {
-        return [];
-    }
+    ) return [];
 
     const [cocoViolations, faceViolations] = await Promise.all([
         runCocoDetection(video),
@@ -34,7 +27,6 @@ export async function runDetection(
     return [...cocoViolations, ...faceViolations];
 }
 
-// ── COCO-SSD: Phone + Multiple Person Detection ───────────
 async function runCocoDetection(
     video: HTMLVideoElement
 ): Promise<DetectionResult[]> {
@@ -46,6 +38,14 @@ async function runCocoDetection(
     try {
         const predictions = (await model.detect(video)) as CocoDetection[];
 
+        // Log ALL detections so you can see what COCO sees
+        if (predictions.length > 0) {
+            console.log(
+                "[COCO] Detected:",
+                predictions.map((p) => `${p.class} (${(p.score * 100).toFixed(0)}%)`).join(", ")
+            );
+        }
+
         // Multiple persons
         const persons = predictions.filter(
             (p) => p.class === "person" && p.score >= THRESHOLDS.PERSON
@@ -54,20 +54,18 @@ async function runCocoDetection(
             violations.push({
                 type: "MULTIPLE_PERSONS",
                 confidence: Math.max(...persons.map((p) => p.score)),
-                metadata: {
-                    count: persons.length,
-                    bboxes: persons.map((p) => p.bbox),
-                },
+                metadata: { count: persons.length, bboxes: persons.map((p) => p.bbox) },
             });
         }
 
-        // Phone detected
+        // Phone
         const phones = predictions.filter(
             (p) =>
                 PHONE_CLASSES.includes(p.class.toLowerCase()) &&
                 p.score >= THRESHOLDS.PHONE
         );
         if (phones.length > 0) {
+            console.log("[COCO] 🚨 PHONE DETECTED:", phones[0].class, phones[0].score);
             violations.push({
                 type: "PHONE_DETECTED",
                 confidence: Math.max(...phones.map((p) => p.score)),
@@ -78,14 +76,13 @@ async function runCocoDetection(
                 },
             });
         }
-    } catch (error) {
-        console.error("[COCO DETECTION ERROR]", error);
+    } catch (err) {
+        console.error("[COCO ERROR]", err);
     }
 
     return violations;
 }
 
-// ── BlazeFace: Face Absence Detection ────────────────────
 async function runFaceDetection(
     video: HTMLVideoElement
 ): Promise<DetectionResult[]> {
@@ -93,25 +90,19 @@ async function runFaceDetection(
     if (!model) return [];
 
     try {
-        // returnTensors: false → plain JS objects, no memory leaks
         const predictions = await model.estimateFaces(video, false);
+        console.log("[BLAZEFACE] Faces detected:", predictions.length);
 
         if (predictions.length === 0) {
-            return [
-                {
-                    type: "FACE_ABSENT",
-                    confidence: 1.0,
-                    metadata: {
-                        facesDetected: 0,
-                        message: "No face detected in frame",
-                    },
-                },
-            ];
+            return [{
+                type: "FACE_ABSENT",
+                confidence: 1.0,
+                metadata: { facesDetected: 0 },
+            }];
         }
-
-        return [];
-    } catch (error) {
-        console.error("[FACE DETECTION ERROR]", error);
-        return [];
+    } catch (err) {
+        console.error("[BLAZEFACE ERROR]", err);
     }
+
+    return [];
 }

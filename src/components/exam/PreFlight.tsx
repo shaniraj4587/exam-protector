@@ -2,8 +2,8 @@
 
 "use client";
 
-import { useState } from "react";
-import { useWebcam } from "@/hooks/useWebcam";
+import { useState, useCallback, useRef } from "react";
+import { useWebcamContext } from "@/context/WebcamContext";
 
 interface PreFlightProps {
     examTitle: string;
@@ -20,35 +20,71 @@ export function PreFlight({
     questionCount,
     onReady,
 }: PreFlightProps) {
-    const { videoRef, isReady: camReady, error: camError, requestCamera } =
-        useWebcam();
+    const { videoRef, isReady: camReady, error: camError, requestCamera, attachStream } =
+        useWebcamContext();
 
     const [checks, setChecks] = useState<Record<string, CheckStatus>>({
         camera: "pending",
         browser: "pending",
         fullscreen: "pending",
     });
+    const [running, setRunning] = useState(false);
 
-    const updateCheck = (key: string, status: CheckStatus) => {
+    const updateCheck = (key: string, status: CheckStatus) =>
         setChecks((prev) => ({ ...prev, [key]: status }));
-    };
+
+    // Callback ref so stream attaches as soon as <video> mounts
+    const videoCallbackRef = useCallback(
+        (el: HTMLVideoElement | null) => {
+            if (!el) return;
+            (videoRef as React.MutableRefObject<HTMLVideoElement>).current = el;
+            attachStream(el);
+        },
+        [videoRef, attachStream]
+    );
 
     const runChecks = async () => {
-        // Browser check
+        setRunning(true);
+
+        // ── 1. Browser check ────────────────────────────────
         const isChrome =
             /Chrome/.test(navigator.userAgent) ||
             /Edg/.test(navigator.userAgent);
         updateCheck("browser", isChrome ? "pass" : "fail");
 
-        // Camera check
-        await requestCamera();
-        updateCheck("camera", camReady || !camError ? "pass" : "fail");
+        // ── 2. Fullscreen check ──────────────────────────────
+        updateCheck("fullscreen", document.fullscreenEnabled ? "pass" : "fail");
 
-        // Fullscreen check
-        updateCheck(
-            "fullscreen",
-            document.fullscreenEnabled ? "pass" : "fail"
-        );
+        // ── 3. Camera check ──────────────────────────────────
+        try {
+            // Directly request getUserMedia here so we know exactly
+            // when the permission is granted
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
+                    facingMode: "user",
+                },
+                audio: false,
+            });
+
+            // Call context requestCamera so the stream is stored in context
+            await requestCamera();
+
+            // Attach to preview video directly
+            const video = videoRef.current;
+            if (video) {
+                video.srcObject = stream;
+                await video.play().catch(() => { });
+            }
+
+            updateCheck("camera", "pass");
+        } catch (err) {
+            console.error("[PREFLIGHT CAMERA]", err);
+            updateCheck("camera", "fail");
+        } finally {
+            setRunning(false);
+        }
     };
 
     const allPassed = Object.values(checks).every((s) => s === "pass");
@@ -124,7 +160,7 @@ export function PreFlight({
                             "The exam must remain in fullscreen mode",
                             "No phones or additional persons allowed in frame",
                             "Copy/paste and right-click are disabled",
-                            "Your screen activity is being monitored by AI",
+                            "Your screen activity is monitored by AI",
                         ].map((rule, i) => (
                             <li key={i} className="flex items-start gap-2">
                                 <span className="text-red-400 mt-0.5">•</span>
@@ -144,10 +180,10 @@ export function PreFlight({
                     <CheckRow
                         label="Camera Access"
                         status={checks.camera}
-                        failMsg="Please allow camera access to proceed"
+                        failMsg="Click 'Re-run Checks' and allow camera when browser asks"
                     />
                     <CheckRow
-                        label="Browser Compatibility"
+                        label="Browser Compat"
                         status={checks.browser}
                         failMsg="Use Chrome or Edge for best experience"
                     />
@@ -157,17 +193,20 @@ export function PreFlight({
                         failMsg="Your browser does not support fullscreen"
                     />
 
-                    {/* Camera preview */}
+                    {/* Camera preview — only shown after pass */}
                     {checks.camera === "pass" && (
-                        <div className="mt-4 flex justify-center">
+                        <div className="mt-4 flex flex-col items-center gap-2">
                             <video
-                                ref={videoRef}
+                                ref={videoCallbackRef}
                                 autoPlay
                                 muted
                                 playsInline
-                                className="w-40 h-32 rounded-lg object-cover
-                           border border-gray-700"
+                                className="w-48 h-36 rounded-lg object-cover
+                           border border-green-700 bg-gray-800"
                             />
+                            <p className="text-xs text-green-400">
+                                ✓ Camera feed confirmed
+                            </p>
                         </div>
                     )}
                 </div>
@@ -176,20 +215,26 @@ export function PreFlight({
                 {notStarted && (
                     <button
                         onClick={runChecks}
-                        className="w-full bg-blue-600 hover:bg-blue-500 text-white
-                       font-semibold py-3 rounded-xl transition-colors"
+                        disabled={running}
+                        className="w-full bg-blue-600 hover:bg-blue-500
+                       disabled:bg-blue-800 disabled:cursor-not-allowed
+                       text-white font-semibold py-3 rounded-xl
+                       transition-colors"
                     >
-                        Run System Checks
+                        {running ? "Checking…" : "Run System Checks"}
                     </button>
                 )}
 
                 {!notStarted && !allPassed && (
                     <button
                         onClick={runChecks}
-                        className="w-full bg-gray-700 hover:bg-gray-600 text-white
-                       font-medium py-3 rounded-xl transition-colors"
+                        disabled={running}
+                        className="w-full bg-gray-700 hover:bg-gray-600
+                       disabled:opacity-50 disabled:cursor-not-allowed
+                       text-white font-medium py-3 rounded-xl
+                       transition-colors"
                     >
-                        Re-run Checks
+                        {running ? "Checking…" : "Re-run Checks"}
                     </button>
                 )}
 
@@ -203,10 +248,23 @@ export function PreFlight({
                     </button>
                 )}
 
-                {anyFailed && (
+                {anyFailed && !running && (
                     <p className="text-center text-xs text-red-400 mt-3">
-                        Fix the issues above before proceeding.
+                        Fix the issues above and click Re-run Checks.
                     </p>
+                )}
+
+                {/* Camera permission tip */}
+                {checks.camera === "fail" && (
+                    <div className="mt-4 bg-yellow-900/20 border border-yellow-700
+                          rounded-xl p-4 text-xs text-yellow-300">
+                        <p className="font-semibold mb-1">📷 How to allow camera:</p>
+                        <ol className="list-decimal list-inside space-y-1 text-yellow-400">
+                            <li>Click the 🔒 lock icon in your browser address bar</li>
+                            <li>Find "Camera" and set it to "Allow"</li>
+                            <li>Refresh the page and try again</li>
+                        </ol>
+                    </div>
                 )}
             </div>
         </div>
